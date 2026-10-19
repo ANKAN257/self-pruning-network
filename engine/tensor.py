@@ -38,35 +38,30 @@ class Tensor:
 
     @staticmethod
     def _sum_to_shape(grad: np.ndarray, shape: Sequence[int]) -> np.ndarray:
+        """Reduce a broadcasted gradient back to the operand's original shape."""
         grad = np.asarray(grad, dtype=np.float64)
         shape = tuple(shape)
 
         if grad.shape == shape:
             return grad
 
+        # Extra leading dimensions come from broadcasting and must be summed.
         while grad.ndim > len(shape):
             grad = grad.sum(axis=0)
 
-        if grad.ndim < len(shape):
-            for _ in range(len(shape) - grad.ndim):
-                grad = grad.sum(axis=0)
-
+        # Dimensions of size one were broadcast and must retain their axis.
         for axis, dim in enumerate(shape):
             if dim == 1 and grad.shape[axis] != 1:
                 grad = grad.sum(axis=axis, keepdims=True)
 
-        while grad.shape != shape:
-            for axis, (gdim, sdim) in enumerate(zip(grad.shape, shape)):
-                if gdim != sdim and sdim == 1:
-                    grad = grad.sum(axis=axis, keepdims=True)
-                    break
-            else:
-                for axis, (gdim, sdim) in enumerate(zip(grad.shape, shape)):
-                    if gdim != sdim:
-                        grad = grad.sum(axis=axis, keepdims=True)
-                        break
-
-        return np.reshape(grad, shape)
+        if grad.shape != shape:
+            try:
+                grad = grad.reshape(shape)
+            except ValueError as exc:
+                raise ValueError(
+                    f"Cannot reduce gradient with shape {grad.shape} to operand shape {shape}"
+                ) from exc
+        return grad
 
     def __add__(self, other):
         other = self._ensure_tensor(other)
@@ -172,10 +167,38 @@ class Tensor:
         )
 
         def _backward():
+            grad = np.asarray(out.grad, dtype=np.float64)
+            left = self.data
+            right = other.data
+
+            # NumPy matmul supports vector, matrix, and batched matrix cases.
+            # Handle vector operands explicitly, then reduce broadcast batch
+            # dimensions back to each operand's original shape.
             if self.requires_grad:
-                self.grad += np.asarray(out.grad, dtype=np.float64) @ other.data.T
+                if left.ndim == 1 and right.ndim == 1:
+                    grad_left = grad * right
+                elif left.ndim == 1:
+                    grad_left = np.matmul(
+                        np.expand_dims(grad, axis=-2), np.swapaxes(right, -1, -2)
+                    ).squeeze(axis=-2)
+                elif right.ndim == 1:
+                    grad_left = np.expand_dims(grad, axis=-1) * right
+                else:
+                    grad_left = np.matmul(grad, np.swapaxes(right, -1, -2))
+                self.grad += self._sum_to_shape(grad_left, left.shape)
+
             if other.requires_grad:
-                other.grad += self.data.T @ np.asarray(out.grad, dtype=np.float64)
+                if left.ndim == 1 and right.ndim == 1:
+                    grad_right = grad * left
+                elif left.ndim == 1:
+                    grad_right = np.expand_dims(left, axis=-1) * np.expand_dims(grad, axis=-2)
+                elif right.ndim == 1:
+                    grad_right = np.sum(
+                        left * np.expand_dims(grad, axis=-1), axis=-2
+                    )
+                else:
+                    grad_right = np.matmul(np.swapaxes(left, -1, -2), grad)
+                other.grad += self._sum_to_shape(grad_right, right.shape)
 
         out._backward = _backward
         return out
@@ -311,6 +334,13 @@ class Tensor:
             topo.append(node)
 
         build(self)
+
+        # Leaf gradients intentionally accumulate across backward calls, but
+        # intermediate gradients belong to this traversal and must be cleared.
+        for node in topo:
+            if node is not self and node._parents:
+                node.grad = np.zeros_like(node.data, dtype=np.float64)
+
         self.grad = np.ones_like(self.data, dtype=np.float64)
         for node in reversed(topo):
             if hasattr(node, "_backward"):
