@@ -64,9 +64,88 @@ python -m pip install -r requirements.txt
 python scripts/train.py
 ```
 
-Writes training-set metrics and epoch history to `results/training_metrics.json`. These are training metrics, not held-out validation results.
+This trains the model and saves metrics to the `results` folder.
 
-### 5. Run the pruning comparison
+### 5. Run evaluation
+
+```bash
+python scripts/evaluate.py
+```
+
+This prints a summary of the saved training results.
+
+### 6. Run the test suite
+
+```bash
+python -m pytest -q
+```
+
+---
+
+## Setup
+
+1. Create a virtual environment
+2. Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+3. Verify NumPy and Matplotlib are available
+4. Start implementing the autodiff system and training pipeline
+
+---
+
+## Development Workflow
+
+The expected progression is:
+
+1. Implement tensor nodes and reverse-mode autodiff
+2. Add basic arithmetic and activation support
+3. Build a simple MLP and softmax cross-entropy loss
+4. Train on a small classification dataset
+5. Add Adam optimizer and mini-batch training
+6. Implement masking and pruning policy
+7. Evaluate sparsity settings and generate curves
+
+---
+
+## Expected Outcomes
+
+By the end of the project, the implementation should show:
+
+- A working custom autodiff engine
+- A stable training loop for a small classifier
+- A dynamic pruning strategy that removes low-importance weights over time
+- Honest computational cost reporting for sparse models
+- A clear accuracy-vs-sparsity tradeoff analysis
+
+---
+
+## Suggested Evaluation Metrics
+
+At minimum, report:
+
+- Train and validation loss
+- Train and validation accuracy
+- Active parameter count
+- Effective sparsity percentage
+- Relative compute reduction
+- Comparison of magnitude pruning vs importance-based pruning
+
+---
+
+## Challenge Evidence and Benchmarking
+
+This repository follows the case-study requirements for the self-pruning network challenge:
+
+- The autodiff engine, optimizer, pruning logic, and training loop are implemented from scratch in NumPy.
+- The current CSV/synthetic dataset loader uses NumPy; scikit-learn is not used by the model or autodiff engine.
+- The project includes a benchmark sweep over sparsity targets to produce a Pareto-style accuracy-vs-sparsity curve.
+- The benchmark reports active-weight ratio as a structural proxy only. The current NumPy forward path is dense, so this is not a measured latency or FLOP speedup.
+- The masking logic uses explicit masks, exact zeros, zero gradients for inactive entries, and clears Adam moments while entries are inactive. The current policy is prune-only; regrowth is not implemented.
+
+### Benchmark command
 
 ```bash
 python scripts/pruning_analysis.py
