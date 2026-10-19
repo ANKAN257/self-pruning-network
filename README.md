@@ -165,7 +165,7 @@ The project includes the validation checks expected by the problem statement:
 - tests/test_broadcast.py for broadcasting backpropagation
 - tests/test_masked_weights.py for masked-weight correctness and optimizer safety
 
-These checks validate the core numerical correctness that makes the pruning logic reliable.
+These tests cover selected numerical and pruning invariants. Run the full suite before relying on results; the tests are not a formal proof of every operation.
 
 ---
 
@@ -419,10 +419,10 @@ At minimum, report:
 This repository follows the case-study requirements for the self-pruning network challenge:
 
 - The autodiff engine, optimizer, pruning logic, and training loop are implemented from scratch in NumPy.
-- Scikit-learn is used only for dataset loading and not for model training or gradient computation.
+- The current CSV/synthetic dataset loader uses NumPy; scikit-learn is not used by the model or autodiff engine.
 - The project includes a benchmark sweep over sparsity targets to produce a Pareto-style accuracy-vs-sparsity curve.
-- The project reports real cost reduction via active-parameter accounting rather than a dense multiply-by-zero shortcut.
-- The masking logic zeroes pruned weights and their gradients so Adam momentum/variance do not silently corrupt training after reactivation.
+- The benchmark reports active-weight ratio as a structural proxy only. The current NumPy forward path is dense, so this is not a measured latency or FLOP speedup.
+- The masking logic uses explicit masks, exact zeros, zero gradients for inactive entries, and clears Adam moments while entries are inactive. The current policy is prune-only; regrowth is not implemented.
 
 ### Benchmark command
 
@@ -443,15 +443,13 @@ The project measures cost as the fraction of active parameters remaining after p
 active_ratio = active_parameters / total_parameters
 ```
 
-This is a real sparse-work metric that reflects the actual number of surviving weights in the forward pass. It is not a dense inference pass that simply multiplies by zeros.
+This is a structural active-weight ratio, not a measured runtime metric. The current implementation still runs dense NumPy matrix multiplication, so it does not prove an inference speedup.
 
 ### Falsifiable claim
 
 The repository supports a claim such as:
 
-> At 90% sparsity, the saliency-based criterion retains materially higher accuracy than magnitude-only pruning while reducing active work substantially.
-
-The exact value is computed from the committed benchmark output in `results/pareto_results.csv`.
+Use the regenerated multi-seed validation CSV to evaluate a falsifiable claim. For example: “At a specified achieved weight sparsity, saliency pruning improves mean held-out accuracy over magnitude pruning by at least X percentage points across the five fixed seeds.” Fill in X only after the new benchmark has been run; do not treat the existing committed results as validation evidence.
 
 ---
 
@@ -460,3 +458,16 @@ The exact value is computed from the committed benchmark output in `results/pare
 This project combines the fundamentals of neural-network training, automatic differentiation, and model sparsification into a single, from-scratch educational system. The key focus is not only to prune a model, but to do so in a mathematically correct, computationally honest, and practically useful way.
 
 The final deliverable is a working framework and analysis pipeline that demonstrates how self-pruning can reduce model cost while preserving accuracy under realistic sparsity targets.
+
+
+## Updated validation workflow
+
+After pulling a correctness update, run:
+
+```bash
+python -m pytest -q
+python scripts/train.py
+python scripts/pruning_analysis.py
+```
+
+The analysis script writes raw per-seed validation results and a mean/standard-deviation Pareto plot. It reports achieved weight sparsity separately from the target. The active-weight ratio remains a structural proxy until a sparse-aware forward implementation and measured latency comparison are added.

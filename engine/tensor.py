@@ -302,6 +302,9 @@ class Tensor:
         for node in reversed(topo):
             if hasattr(node, "_backward"):
                 node._backward()
+            mask = getattr(node, "mask", None)
+            if mask is not None:
+                node.grad = np.where(np.asarray(mask) > 0.0, node.grad, 0.0)
 
 
 def softmax(logits: Tensor) -> Tensor:

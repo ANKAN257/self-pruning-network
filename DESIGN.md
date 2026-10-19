@@ -20,7 +20,7 @@ The backward pass performs a topological walk from outputs back to inputs and ac
 
 The most important bug pattern in pruning implementations is silently corrupting gradient state after a parameter is masked. A quick implementation often keeps the weight at zero but allows momentum or variance to accumulate with stale gradients. That can produce a non-physical optimizer state after the connection is revived.
 
-This project fixes that by zeroing the gradient of pruned entries before the optimizer step and by masking the weights themselves in the forward pass. In practice, a pruned connection is treated as a hard zero for the forward computation and receives no effective gradient contribution while it is inactive. The optimizer state is therefore not allowed to accumulate stale gradients for a weight that is temporarily off. This preserves Adam’s invariants and makes revival stable.
+The optimizer uses an explicit per-parameter mask as the source of truth. Unmasked parameters are fully trainable even when their numeric value is zero (important for zero-initialized biases). Masked entries are forced to exact zero, their gradients are zeroed during backpropagation, and Adam clears their first and second moments on each step. The current policy is monotonic prune-only: it does not support connection regrowth. A future regrowth implementation must explicitly choose a new value and reset optimizer state before marking a connection active.
 
 ## 4. Importance criterion
 
@@ -38,13 +38,13 @@ The scheduler uses a gradual ramp from 0% to the target sparsity, with a nonline
 
 ## 6. Cost metric
 
-The project reports cost honestly using active parameter count instead of the dense multiply-by-zero shortcut. The relevant metric is:
+The benchmark reports the active-weight ratio:
 
-$$
-\text{work ratio} = \frac{\text{active parameters}}{\text{total parameters}}
-$$
+$
+\text{active-weight ratio} = \frac{\text{active weight entries}}{\text{total prunable weight entries}}
+$
 
-This is a genuine sparse-work metric. It reflects real savings in the surviving computation graph and avoids overstating the benefit by claiming the dense forward pass is efficient when zeros are still being multiplied.
+This is a structural proxy, not a measured latency or FLOP speedup. The current NumPy MLP still uses dense matrix multiplication, so zero-valued entries are still part of dense kernel execution. A real speedup claim requires a sparse-aware forward path and a controlled latency/FLOP measurement against the dense baseline.
 
 ## 7. Benchmark strategy
 
@@ -69,3 +69,12 @@ In a live defense, the key explanations are:
 5. Why the project is reproducible and evidence-based rather than relying on hand-wavy claims.
 
 The repo is designed so those points can be defended directly from code and committed results.
+
+
+## 9. Validation protocol
+
+The benchmark uses a seeded held-out split and multiple independent seeds. Magnitude and saliency use the same split for each seed. Saliency is estimated from the training split rather than only the final minibatch. Report the mean and standard deviation of validation accuracy and achieved weight sparsity; do not substitute the scheduled target for measured sparsity. Regenerate the committed CSV and plot by running `python scripts/pruning_analysis.py` after code changes.
+
+## 10. Serving at multi-tenant scale
+
+Treat each deployed model version and its mask as an immutable, versioned artifact. Build and validate the sparse execution representation offline, then publish it atomically so in-flight requests cannot observe a partially updated mask. Batch requests by compatible model version and shape, enforce per-tenant concurrency/queue quotas, and isolate tenant-specific model state and metrics. Apply admission control against latency and memory budgets; use bounded queues and cancellation for overload. Canary a new artifact, compare error/latency/quality metrics, and roll back by switching the model-version pointer. Never mutate shared weights or masks in place for one tenant while another tenant is serving from the same artifact.
