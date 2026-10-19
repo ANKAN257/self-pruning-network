@@ -1,0 +1,21 @@
+# Temporary experiment outputs
+artifacts/tmp/
+
+# Checkpoints
+checkpoints/
+
+# Virtual envs
+.venv/
+venv/
+
+# Cache
+__pycache__/
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
