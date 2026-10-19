@@ -184,7 +184,20 @@ class Tensor:
         return self * (-1.0)
 
     def __pow__(self, exponent):
-        return Tensor(self.data ** exponent, requires_grad=self.requires_grad, _op="pow", _parents=(self,), _name="pow")
+        out = Tensor(
+            self.data ** exponent,
+            requires_grad=self.requires_grad,
+            _op="pow",
+            _parents=(self,),
+            _name="pow",
+        )
+
+        def _backward():
+            if self.requires_grad:
+                self.grad += np.asarray(out.grad, dtype=np.float64) * exponent * (self.data ** (exponent - 1))
+
+        out._backward = _backward
+        return out
 
     def sum(self, axis=None, keepdims=False):
         out = Tensor(
@@ -199,13 +212,12 @@ class Tensor:
             if not self.requires_grad:
                 return
             grad = np.asarray(out.grad, dtype=np.float64)
-            if axis is None:
-                grad = np.broadcast_to(grad, self.data.shape).copy()
-            else:
+            if axis is not None and not keepdims:
                 axes = (axis,) if isinstance(axis, int) else tuple(axis)
-                for a in sorted(axes):
+                normalized_axes = sorted(a if a >= 0 else self.data.ndim + a for a in axes)
+                for a in normalized_axes:
                     grad = np.expand_dims(grad, axis=a)
-                grad = np.broadcast_to(grad, self.data.shape).copy()
+            grad = np.broadcast_to(grad, self.data.shape).copy()
             self.grad += grad
 
         out._backward = _backward
@@ -226,13 +238,14 @@ class Tensor:
             grad = np.asarray(out.grad, dtype=np.float64)
             if axis is None:
                 count = self.data.size
-                grad = np.broadcast_to(grad / count, self.data.shape).copy()
             else:
                 axes = (axis,) if isinstance(axis, int) else tuple(axis)
-                count = np.prod([self.data.shape[a] for a in axes], dtype=np.float64)
-                for a in sorted(axes):
-                    grad = np.expand_dims(grad, axis=a)
-                grad = np.broadcast_to(grad / count, self.data.shape).copy()
+                normalized_axes = tuple(a if a >= 0 else self.data.ndim + a for a in axes)
+                count = np.prod([self.data.shape[a] for a in normalized_axes], dtype=np.float64)
+                if not keepdims:
+                    for a in sorted(normalized_axes):
+                        grad = np.expand_dims(grad, axis=a)
+            grad = np.broadcast_to(grad / count, self.data.shape).copy()
             self.grad += grad
 
         out._backward = _backward
@@ -330,18 +343,33 @@ def softmax(logits: Tensor) -> Tensor:
 
 
 def cross_entropy(logits: Tensor, targets: Tensor) -> Tensor:
-    probs = softmax(logits)
+    logits_arr = np.asarray(logits.data, dtype=np.float64)
     targets_arr = np.asarray(targets.data, dtype=np.float64)
     if targets_arr.ndim == 1:
-        targets_arr = np.eye(logits.data.shape[-1])[targets_arr.astype(int)]
-    loss = -np.sum(targets_arr * np.log(probs.data + 1e-12), axis=1).mean()
-    out = Tensor(np.asarray(loss, dtype=np.float64), requires_grad=logits.requires_grad or targets.requires_grad, _op="cross_entropy", _parents=(logits, targets), _name="cross_entropy")
+        targets_arr = np.eye(logits_arr.shape[-1])[targets_arr.astype(int)]
+    if logits_arr.ndim == 1:
+        logits_arr = logits_arr.reshape(1, -1)
+        targets_arr = targets_arr.reshape(1, -1)
+
+    shifted = logits_arr - np.max(logits_arr, axis=1, keepdims=True)
+    log_probs = shifted - np.log(np.sum(np.exp(shifted), axis=1, keepdims=True))
+    probs = np.exp(log_probs)
+    batch_size = logits_arr.shape[0]
+    loss = float(-np.sum(targets_arr * log_probs) / batch_size)
+    out = Tensor(
+        np.asarray(loss, dtype=np.float64),
+        requires_grad=logits.requires_grad or targets.requires_grad,
+        _op="cross_entropy",
+        _parents=(logits, targets),
+        _name="cross_entropy",
+    )
 
     def _backward():
         if logits.requires_grad:
-            logits.grad += (probs.data - targets_arr) / logits.data.shape[0]
+            grad = (probs - targets_arr) / batch_size
+            logits.grad += grad.reshape(logits.data.shape)
         if targets.requires_grad:
-            targets.grad += -(probs.data / logits.data.shape[0])
+            targets.grad += (-log_probs / batch_size).reshape(targets.data.shape)
 
     out._backward = _backward
     return out
@@ -356,9 +384,9 @@ def softmax_cross_entropy(logits: Tensor, targets: Tensor) -> Tensor:
         targets_arr = targets_arr.reshape(1, -1)
 
     shifted = logits_arr - np.max(logits_arr, axis=1, keepdims=True)
-    exp = np.exp(shifted)
-    probs = exp / np.sum(exp, axis=1, keepdims=True)
-    per_sample_loss = -np.sum(targets_arr * np.log(probs + 1e-12), axis=1)
+    log_probs = shifted - np.log(np.sum(np.exp(shifted), axis=1, keepdims=True))
+    probs = np.exp(log_probs)
+    per_sample_loss = -np.sum(targets_arr * log_probs, axis=1)
     loss = float(np.mean(per_sample_loss))
 
     out = Tensor(
@@ -373,7 +401,7 @@ def softmax_cross_entropy(logits: Tensor, targets: Tensor) -> Tensor:
         if logits.requires_grad:
             logits.grad += (probs - targets_arr) / logits_arr.shape[0]
         if targets.requires_grad:
-            targets.grad += -(probs / logits_arr.shape[0])
+            targets.grad += -log_probs / logits_arr.shape[0]
 
     out._backward = _backward
     return out
