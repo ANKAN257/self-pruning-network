@@ -376,6 +376,8 @@ def cross_entropy(logits: Tensor, targets: Tensor) -> Tensor:
 
 
 def softmax_cross_entropy(logits: Tensor, targets: Tensor) -> Tensor:
+    original_logits_shape = logits.data.shape
+    original_targets_shape = targets.data.shape
     logits_arr = np.asarray(logits.data, dtype=np.float64)
     targets_arr = np.asarray(targets.data, dtype=np.float64)
 
@@ -399,9 +401,9 @@ def softmax_cross_entropy(logits: Tensor, targets: Tensor) -> Tensor:
 
     def _backward():
         if logits.requires_grad:
-            logits.grad += (probs - targets_arr) / logits_arr.shape[0]
+            logits.grad += ((probs - targets_arr) / logits_arr.shape[0]).reshape(original_logits_shape)
         if targets.requires_grad:
-            targets.grad += -log_probs / logits_arr.shape[0]
+            targets.grad += (-log_probs / logits_arr.shape[0]).reshape(original_targets_shape)
 
     out._backward = _backward
     return out
