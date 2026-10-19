@@ -2,79 +2,59 @@
 
 ## 1. Goal
 
-The core challenge is to build a neural network that prunes itself while training, without relying on a framework-level autodiff engine. The finished system must keep the computation graph honest when weights are masked, preserve optimizer correctness under pruning and reactivation, and produce evidence that the sparse model is genuinely cheaper without an unacceptable accuracy drop.
+Build a small neural network with a custom reverse-mode autodiff engine and self-pruning weights. The implementation makes gradient accumulation, mask lifecycle, optimizer state, accuracy trade-offs, and the limits of sparse execution explicit.
 
 ## 2. Autodiff design
 
-The project uses a custom `Tensor` object backed by NumPy arrays. Each tensor stores:
+Each NumPy-backed `Tensor` stores data, a `requires_grad` flag, a gradient array, parent tensors, and a backward closure. Backpropagation traverses the graph in reverse topological order and accumulates gradients in place, which is necessary when a parameter influences an output through multiple paths. Broadcasting-aware backward rules reduce gradients to the original operand shape.
 
-- a floating-point array
-- a `requires_grad` flag
-- a gradient array
-- parent tensors for reverse-mode traversal
-- a backward closure for local gradient propagation
-
-The backward pass performs a topological walk from outputs back to inputs and accumulates gradients in-place. This is essential because multiple paths can contribute to the same parameter. The implementation explicitly handles broadcasting by reducing gradient tensors back to the original parameter shape, which is crucial for the masking case and for operations like `(N, D) + (D,)`.
+The test suite includes central finite-difference checks for arithmetic with broadcasting, matrix multiplication, powers, reductions including multi-axis reductions, activations, softmax, and softmax-cross-entropy. Finite-difference checks are a practical way to catch derivative mistakes that simple expected-value tests may miss.
 
 ## 3. Masked-weight correctness
 
-The most important bug pattern in pruning implementations is silently corrupting gradient state after a parameter is masked. A quick implementation often keeps the weight at zero but allows momentum or variance to accumulate with stale gradients. That can produce a non-physical optimizer state after the connection is revived.
-
-The optimizer uses an explicit per-parameter mask as the source of truth. Unmasked parameters are fully trainable even when their numeric value is zero (important for zero-initialized biases). Masked entries are forced to exact zero, their gradients are zeroed during backpropagation, and Adam clears their first and second moments on each step. The current policy is monotonic prune-only: it does not support connection regrowth. A future regrowth implementation must explicitly choose a new value and reset optimizer state before marking a connection active.
+The optimizer uses an explicit parameter mask as the source of truth. A zero-valued parameter remains trainable if it has no mask (important for zero-initialized biases). Inactive weights are forced to exact zero; their gradients and Adam first/second moments are cleared. Pruning is monotonic and prune-only. Regrowth is not implemented; a future regrowth policy must initialize the revived weight and reset its optimizer state before marking it active.
 
 ## 4. Importance criterion
 
-The pruning criterion uses a saliency-style score based on the product of weight magnitude and gradient magnitude:
+The saliency score is:
 
 $$
 \text{saliency} = |w \cdot \nabla_w L|
 $$
 
-This approximates the first-order change in loss caused by removing a connection. A magnitude-only approach is a weaker baseline because it ignores how sensitive the loss is to each parameter. Using saliency captures both weight strength and sensitivity, which is a more defensible criterion for pruning under a strict compute budget.
+This first-order Taylor-style score estimates how sensitive the loss is to removing a connection. Magnitude pruning, based on `|w|`, is the baseline. The multi-seed benchmark evaluates both criteria using the same seeded train/validation split for each seed.
 
 ## 5. Pruning schedule
 
-The scheduler uses a gradual ramp from 0% to the target sparsity, with a nonlinear curve to keep early training stable and later epochs more aggressive. The schedule is not a one-shot “prune-at-the-end” solution. Instead, it preserves optimization stability while gradually pushing the network toward a sparse structure. This is a more realistic engineering choice for a self-pruning system and matches the real-world pressure to reduce cost during training instead of after the fact.
+The scheduler ramps target sparsity nonlinearly from the starting value to the target. The benchmark estimates saliency from the full training split rather than only the final minibatch and reports achieved sparsity rather than substituting the requested target.
 
-## 6. Cost metric
+## 6. Cost and sparse-aware inference
 
-The benchmark reports the active-weight ratio:
+The active-weight ratio is:
 
-$
+$$
 \text{active-weight ratio} = \frac{\text{active weight entries}}{\text{total prunable weight entries}}
-$
+$$
 
-This is a structural proxy, not a measured latency or FLOP speedup. The current NumPy MLP still uses dense matrix multiplication, so zero-valued entries are still part of dense kernel execution. A real speedup claim requires a sparse-aware forward path and a controlled latency/FLOP measurement against the dense baseline.
+This ratio is structural and is not a latency or FLOP speedup claim.
 
-## 7. Benchmark strategy
+The ordinary autodiff/training forward path uses dense NumPy matrix multiplication. A separate inference-only path, `MLP.forward_sparse_array`, iterates over output features and multiplies only by nonzero weights. It is a correctness-oriented reference implementation; Python and array-indexing overhead can make it slower than dense BLAS. `scripts/sparse_execution_benchmark.py` checks numerical equivalence and measures median wall-clock latency for dense and sparse-aware array paths on the same model and batch. It also reports a weight multiply-count proxy. The proxy excludes bias and activation work and is not a hardware FLOP counter.
 
-The repository contains a pruning sweep over several target sparsity levels, including 0%, 50%, 75%, 90%, and 95%. For each target, the project records:
+Run the benchmark in the target environment before making a performance claim. Record the Python/NumPy version and machine details alongside any final numbers; a microbenchmark result on a small synthetic model does not establish a general speedup.
 
-- achieved sparsity
-- active parameter count
-- accuracy
-- loss
-- work ratio
+## 7. Validation protocol
 
-These results are stored in `results/pareto_results.csv` and visualized in `results/pareto_curve.png`.
+`scripts/pruning_analysis.py` evaluates target sparsities 0%, 50%, 75%, 90%, and 95% across five seeds, with held-out validation data. It saves individual trial rows to `results/pareto_results.csv` and plots mean accuracy with standard deviation in `results/pareto_curve.png`. Regenerate the results after changing code, data, or dependencies.
 
-## 8. Defense angle
+Run:
 
-In a live defense, the key explanations are:
+```bash
+python -m pytest -q
+python scripts/train.py
+python scripts/pruning_analysis.py
+python scripts/sparse_execution_benchmark.py
+```
 
-1. Why the backward pass must accumulate gradients correctly even when broadcasting occurs.
-2. Why masking a parameter is not merely setting it to zero; the gradient and optimizer state must be treated consistently.
-3. Why saliency-based pruning is more defensible than magnitude-only pruning.
-4. Why the reported cost metric is honest and what it does not claim.
-5. Why the project is reproducible and evidence-based rather than relying on hand-wavy claims.
+## 8. Multi-tenant serving considerations
 
-The repo is designed so those points can be defended directly from code and committed results.
-
-
-## 9. Validation protocol
-
-The benchmark uses a seeded held-out split and multiple independent seeds. Magnitude and saliency use the same split for each seed. Saliency is estimated from the training split rather than only the final minibatch. Report the mean and standard deviation of validation accuracy and achieved weight sparsity; do not substitute the scheduled target for measured sparsity. Regenerate the committed CSV and plot by running `python scripts/pruning_analysis.py` after code changes.
-
-## 10. Serving at multi-tenant scale
-
-Treat each deployed model version and its mask as an immutable, versioned artifact. Build and validate the sparse execution representation offline, then publish it atomically so in-flight requests cannot observe a partially updated mask. Batch requests by compatible model version and shape, enforce per-tenant concurrency/queue quotas, and isolate tenant-specific model state and metrics. Apply admission control against latency and memory budgets; use bounded queues and cancellation for overload. Canary a new artifact, compare error/latency/quality metrics, and roll back by switching the model-version pointer. Never mutate shared weights or masks in place for one tenant while another tenant is serving from the same artifact.
+Treat each deployed model version and its mask as an immutable artifact. Build and validate sparse execution representations offline and publish them atomically. Batch requests by compatible model version and shape; enforce per-tenant concurrency and queue quotas; isolate tenant-specific state and metrics; and apply admission control against latency and memory budgets. Use canaries and roll back by switching the model-version pointer. Never mutate shared weights or masks in place for one tenant while another tenant is serving from the same artifact.
