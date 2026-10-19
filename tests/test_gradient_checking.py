@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from engine import Tensor, softmax, softmax_cross_entropy
+from engine import Tensor, cross_entropy, softmax, softmax_cross_entropy
 
 
 def assert_finite_difference_matches_autodiff(function, values, *, eps=1e-6, atol=2e-5, rtol=2e-4):
@@ -33,11 +33,20 @@ def assert_finite_difference_matches_autodiff(function, values, *, eps=1e-6, ato
 def test_broadcast_binary_operation_gradients_match_finite_difference(operation):
     x = np.array([[0.8], [1.4]])
     y = np.array([[1.2, 2.0, 2.8]])
+
     def function(a, b):
         result = {"add": lambda: a + b, "sub": lambda: a - b,
                   "mul": lambda: a * b, "div": lambda: a / b}[operation]()
         return (result ** 2).sum()
+
     assert_finite_difference_matches_autodiff(function, [x, y])
+
+
+def test_reverse_operators_and_shared_graph_accumulate_gradients():
+    x = np.array([0.6, 1.1, 1.8])
+    def function(a):
+        return (2.5 - a).sum() + (2.5 / a).sum() + (-(a * a)).sum()
+    assert_finite_difference_matches_autodiff(function, [x])
 
 
 def test_matmul_gradients_match_finite_difference():
@@ -56,8 +65,10 @@ def test_activation_gradients_match_finite_difference(activation):
     # Avoid ReLU's nondifferentiable point at zero.
     x = np.array([-1.3, -0.6, 0.25, 0.8, 1.4])
     upstream = np.array([0.7, -0.3, 1.2, 0.5, -0.9])
+
     def function(a):
         return (getattr(a, activation)() * upstream).sum()
+
     assert_finite_difference_matches_autodiff(function, [x], atol=5e-5, rtol=5e-4)
 
 
@@ -65,10 +76,19 @@ def test_activation_gradients_match_finite_difference(activation):
 @pytest.mark.parametrize("axis", [(0, 2), (2, 0), (-1, 0), (1,)])
 def test_multi_axis_reduction_gradients_match_finite_difference(operation, axis):
     x = np.arange(1.0, 25.0).reshape(2, 3, 4) / 7.0
-    weights = np.arange(1.0, 4.0) if len(axis) == 2 and set(a % 3 for a in axis) == {0, 2} else None
+
     def function(a):
         reduced = getattr(a, operation)(axis=axis)
         return (reduced ** 2).sum()
+
+    assert_finite_difference_matches_autodiff(function, [x])
+
+
+@pytest.mark.parametrize("operation", ["sum", "mean"])
+def test_reduction_keepdims_gradient_matches_finite_difference(operation):
+    x = np.arange(1.0, 13.0).reshape(3, 4) / 5.0
+    def function(a):
+        return (getattr(a, operation)(axis=0, keepdims=True) ** 2).sum()
     assert_finite_difference_matches_autodiff(function, [x])
 
 
@@ -76,6 +96,14 @@ def test_softmax_gradient_matches_finite_difference():
     x = np.array([[0.2, -0.5, 0.9], [1.1, 0.4, -0.8]])
     upstream = np.array([[0.3, -0.7, 0.5], [0.2, 0.8, -0.4]])
     assert_finite_difference_matches_autodiff(lambda a: (softmax(a) * upstream).sum(), [x])
+
+
+def test_cross_entropy_logits_gradient_matches_finite_difference():
+    logits = np.array([[0.4, -0.2, 1.0], [-0.7, 0.8, 0.1]])
+    targets = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    assert_finite_difference_matches_autodiff(
+        lambda a: cross_entropy(a, Tensor(targets)), [logits], atol=3e-5, rtol=3e-4
+    )
 
 
 def test_softmax_cross_entropy_logits_and_target_gradients_match_finite_difference():
