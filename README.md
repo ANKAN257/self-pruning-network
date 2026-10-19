@@ -1,39 +1,39 @@
 # Self-Pruning Neural Network from Scratch
 
-A NumPy-based educational project that implements a small neural-network training stack, including a custom reverse-mode automatic differentiation engine, an Adam optimizer, and masking-based weight pruning.
+A NumPy-based educational project implementing a custom reverse-mode autodiff engine, Adam optimizer, and mask-based neural-network pruning. It compares magnitude pruning with Taylor-style saliency on held-out data across multiple random seeds.
 
-The project compares magnitude pruning with Taylor-style saliency pruning and records held-out validation results across multiple random seeds. It is designed to make gradient flow, masks, optimizer state, and the accuracy–sparsity trade-off explicit.
-
-> **Efficiency note:** The current MLP uses dense NumPy matrix multiplication. The reported active-weight ratio is a structural measure, not a measured inference speedup or FLOP reduction.
+The project includes a reference sparse-aware inference path that skips exact-zero weights and a microbenchmark comparing it with dense array inference. This path is designed to make the trade-off measurable, not to promise a speedup: Python-loop overhead can outweigh saved multiplies for small layers.
 
 ## Features
 
 - Custom NumPy-backed tensor and reverse-mode autodiff engine.
-- Arithmetic, matrix multiplication, reductions, activation functions, and stable softmax cross-entropy.
-- MLP and Adam optimizer implemented in the project.
-- Gradual, mask-based weight pruning with magnitude and Taylor-saliency criteria.
-- Explicit masked-weight gradient handling and Adam moment clearing.
-- Unit tests for tensor operations, gradients, optimizer behavior, and pruning invariants.
-- Multi-seed held-out validation benchmark with raw CSV results and a Pareto-style plot.
+- Arithmetic, matrix multiplication, reductions, activations, and stable softmax cross-entropy.
+- MLP and Adam optimizer implemented from scratch.
+- Gradual mask-based pruning with magnitude and Taylor-saliency criteria.
+- Explicit handling of masked gradients and Adam moments.
+- Finite-difference gradient checks for supported operations and broadcasting/reduction cases.
+- Multi-seed held-out validation sweep with raw CSV and Pareto-style plot.
+- Dense versus sparse-aware inference equivalence tests and measured timing benchmark.
+- GitHub Actions workflow that runs pytest on pushes and pull requests.
 
 ## Requirements
 
 - Python 3.10 or newer
 - Git
-- Dependencies from `requirements.txt`
+- Dependencies listed in `requirements.txt`
 
-The neural-network engine, autodiff, optimizer, and pruning logic are implemented with NumPy rather than PyTorch, TensorFlow, JAX, Keras, or an existing autodiff library. Matplotlib is used for plotting, and pytest is used for tests. Scikit-learn is listed as a dependency but the current default dataset loader reads/generates data using NumPy.
+The neural-network engine, autodiff, optimizer, and pruning logic use NumPy rather than PyTorch, TensorFlow, JAX, Keras, or an existing autodiff library. Matplotlib is used for plots; pytest runs tests. Scikit-learn is listed as a dependency, although the default data loader uses NumPy.
 
 ## Quick start
 
-### 1. Clone the repository
+### 1. Clone and enter the repository
 
 ```bash
 git clone https://github.com/ANKAN257/self-pruning-network.git
 cd self-pruning-network
 ```
 
-### 2. Create and activate a virtual environment
+### 2. Create a virtual environment
 
 **Windows PowerShell**
 
@@ -42,7 +42,7 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
-If PowerShell prevents activation, use the environment's Python directly with `.venv\Scripts\python.exe`.
+If PowerShell blocks activation, run commands using `.venv\Scripts\python.exe` instead.
 
 **Linux / macOS**
 
@@ -60,110 +60,79 @@ python -m pip install -r requirements.txt
 
 ### 4. Run training
 
-From the repository root:
-
 ```bash
 python scripts/train.py
 ```
 
-The script trains the MLP and writes training-set metrics and epoch history to `results/training_metrics.json`. These are training metrics, not held-out validation results.
+Writes training-set metrics and epoch history to `results/training_metrics.json`. These are training metrics, not held-out validation results.
 
-### 5. Run the pruning benchmark
+### 5. Run the pruning comparison
 
 ```bash
 python scripts/pruning_analysis.py
 ```
 
-The benchmark evaluates magnitude and saliency pruning over target sparsities of 0%, 50%, 75%, 90%, and 95%, using five seeds and a held-out validation split. It regenerates:
+Compares magnitude and saliency pruning at target sparsities of 0%, 50%, 75%, 90%, and 95%, across five seeds with a held-out validation split. It writes:
 
 - `results/pareto_results.csv` — raw per-seed results.
 - `results/pareto_curve.png` — mean validation accuracy and standard deviation versus achieved sparsity.
 
-The benchmark prints mean and standard deviation of validation accuracy and achieved sparsity. Results can vary if the code, dataset, dependency versions, or random seeds change.
+### 6. Measure sparse-aware inference
 
-### 6. Run the tests
+```bash
+python scripts/sparse_execution_benchmark.py
+```
+
+The benchmark creates a seeded MLP, prunes its weight matrices to approximately 90% sparsity, checks sparse-aware outputs against dense outputs, then reports median timings and a multiply-count proxy for a batch of 1,024 inputs. It writes `results/sparse_execution_benchmark.csv`.
+
+The benchmark is intentionally honest about limitations: it uses a small NumPy model and a transparent output-feature loop, so the sparse path may be slower than dense BLAS. Timings are machine- and environment-specific. The multiply-count proxy counts weight connections only and excludes bias/activation work; it is not a FLOP profiler.
+
+### 7. Run tests
 
 ```bash
 python -m pytest -q
 ```
 
-For verbose test names:
-
-```bash
-python -m pytest -v
-```
+Use `python -m pytest -v` for verbose output. The tests include numerical finite-difference checks and dense/sparse inference equivalence. GitHub Actions also runs the test suite on pushes and pull requests.
 
 ## Project structure
 
 ```text
 self-pruning-network/
-├── engine/                     # Tensor engine, MLP, optimizer, data, pruning, evaluation
+├── engine/                         # Tensor engine, MLP, optimizer, data, pruning
 ├── scripts/
-│   ├── train.py                # Training pipeline
-│   └── pruning_analysis.py     # Multi-seed pruning comparison
-├── tests/                      # Automated regression and correctness tests
-├── data/
-│   └── synthetic_dataset.csv   # Default synthetic dataset (created if missing)
-├── results/
-│   ├── training_metrics.json
-│   ├── pareto_results.csv
-│   └── pareto_curve.png
-├── DESIGN.md                   # Technical design and validation notes
+│   ├── train.py                    # Training pipeline
+│   ├── pruning_analysis.py         # Multi-seed pruning comparison
+│   └── sparse_execution_benchmark.py
+├── tests/                          # Regression, gradient-check, and sparse-path tests
+├── data/                           # Default synthetic dataset (created if missing)
+├── results/                        # Generated metrics, CSV files, and plot
+├── .github/workflows/tests.yml     # CI test workflow
+├── DESIGN.md
 ├── README.md
 └── requirements.txt
 ```
 
-The default dataset contains two input features and a class label. If `data/synthetic_dataset.csv` is missing, the loader generates it. The scripts should be run from the repository root.
+Run scripts from the repository root. The default synthetic dataset contains two input features and a class label; the loader creates it if it is missing.
 
-## How pruning works
+## Pruning and optimizer policy
 
-Two scoring criteria are compared:
+The benchmark compares:
 
-- **Magnitude:** \(|w|\)
-- **Taylor-style saliency:** \(|w \cdot \nabla_w L|\)
+- **Magnitude:** `|w|`
+- **Taylor-style saliency:** `|w * grad(L)|`
 
-The benchmark gradually increases the requested sparsity during each trial. It reports both target sparsity and achieved sparsity; achieved sparsity is the appropriate value to use when comparing results.
+The benchmark ramps the requested sparsity during training and reports both target and achieved sparsity. Achieved sparsity is the appropriate measure for comparisons.
 
-The optimizer uses each parameter's explicit mask. Inactive weights are kept at exact zero, their gradients are suppressed, and Adam's first- and second-moment state for inactive entries is cleared. The current policy is **prune-only**: connection regrowth/reactivation is not implemented.
+The optimizer treats an explicit mask as the source of truth. Masked weights stay exactly zero, masked gradients are suppressed, and Adam's first and second moments are cleared for inactive entries. The current policy is prune-only; regrowth/reactivation is not implemented.
 
-## Interpreting the results
+## Interpreting results
 
-- Validation accuracy is measured on a held-out split, separately from the training metrics written by `train.py`.
-- The CSV records results for individual seeds; the plot summarizes mean accuracy and standard deviation.
-- The active-weight ratio is calculated as:
+- Use the held-out validation metrics from `pruning_analysis.py`; `train.py` reports training metrics.
+- `pareto_results.csv` contains individual-seed results; the plot summarizes mean accuracy and standard deviation.
+- Active-weight ratio is a structural measure, not proof of lower end-to-end latency or memory use.
+- `MLP.forward_sparse_array` skips exact-zero connections, while `MLP.forward_dense_array` uses dense matrix multiplication. The standard autodiff/training forward path remains dense.
+- The sparse-aware path is a reference implementation, not a highly optimized sparse kernel. Do not claim a speedup unless the benchmark measurements on the target environment demonstrate one.
+- Aggressive pruning can reduce accuracy; use the committed/generated raw data to assess the trade-off.
 
-  ```text
-  active_weight_ratio = active_weight_parameters / total_prunable_weight_parameters
-  ```
-
-- The active-weight ratio indicates how many prunable weights remain active. It does **not** establish lower latency, lower FLOPs, or lower memory use in execution.
-- The current forward path uses dense NumPy matrix multiplication, so zero-valued weights are not automatically skipped by a sparse kernel.
-- Very aggressive sparsity can reduce accuracy. Use the CSV to assess the trade-off rather than assuming every target preserves quality.
-
-## Design documentation
-
-See [DESIGN.md](DESIGN.md) for details on the autodiff graph, broadcasting-aware gradients, masked-weight policy, saliency criterion, pruning schedule, validation protocol, efficiency limitations, and multi-tenant serving considerations.
-
-## Reproducing and checking changes
-
-Run the full validation workflow from the repository root:
-
-```bash
-python -m pytest -q
-python scripts/train.py
-python scripts/pruning_analysis.py
-git status
-```
-
-The scripts regenerate files under `results/`. If you are developing locally, review any changes before committing:
-
-```bash
-git diff -- results/
-```
-
-## Current limitations
-
-- No sparse-aware matrix multiplication or measured latency benchmark is implemented.
-- The pruning policy does not support regrowth.
-- The training script reports training-set metrics; use the pruning analysis script for held-out validation comparisons.
-- Benchmark results describe this dataset and setup and should not be generalized to larger models without further evaluation.
+See [DESIGN.md](DESIGN.md) for autodiff, pruning, evaluation, cost-measurement, and multi-tenant serving notes.
