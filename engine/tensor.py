@@ -132,6 +132,10 @@ class Tensor:
 
     def __truediv__(self, other):
         other = self._ensure_tensor(other)
+        # NumPy would silently produce inf/nan for zero denominators. Raise a
+        # deterministic Python exception instead, before creating a bad graph.
+        if np.any(other.data == 0.0):
+            raise ZeroDivisionError("Tensor division by zero: denominator contains zero")
         out = Tensor(
             self.data / other.data,
             requires_grad=self.requires_grad or other.requires_grad,
