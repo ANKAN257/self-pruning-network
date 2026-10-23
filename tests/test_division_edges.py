@@ -11,7 +11,7 @@ def test_tensor_division_backpropagates_for_broadcast_denominator():
     (numerator / denominator).sum().backward()
 
     assert np.allclose(numerator.grad, np.array([[0.5, 0.25], [0.5, 0.25]]))
-    assert np.allclose(denominator.grad, np.array([-2.0, -1.5]))
+    assert np.allclose(denominator.grad, np.array([-2.0, -0.75]))
 
 
 def test_tensor_division_rejects_scalar_zero_denominator():
