@@ -39,7 +39,12 @@ def _parse_csv_dataset(path: Path) -> Tuple[np.ndarray, np.ndarray]:
         raise ValueError(f"Dataset must contain features and a label column: {path}")
 
     features = data[:, :-1]
-    labels = data[:, -1].astype(np.int64)
+    raw_labels = data[:, -1]
+    if not np.all(np.isfinite(data)):
+        raise ValueError(f"Dataset must contain only finite numeric values: {path}")
+    if not np.all(raw_labels == np.floor(raw_labels)):
+        raise ValueError(f"Labels must be integer class indices: {path}")
+    labels = raw_labels.astype(np.int64)
     return features, labels
 
 
