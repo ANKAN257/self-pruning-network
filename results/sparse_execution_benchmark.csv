@@ -1,2 +1,2 @@
 target_sparsity,achieved_sparsity,batch_size,dense_median_ms,sparse_aware_median_ms,measured_speedup_dense_over_sparse,dense_weight_multiply_count_proxy,sparse_active_weight_multiply_count_proxy,max_absolute_output_error,warmup_runs,timed_runs,note
-0.9,0.90625,1024,0.1004999994620448,0.8458000011160038,0.11882241585414817,65536,6144,0.0,3,15,Multiply-count proxy excludes bias/activation; timings are environment-specific and sparse path may be slower.
+0.9,0.90625,1024,0.10520000068936497,0.3505000058794394,0.30014265028443493,65536,6144,0.0,3,15,Multiply-count proxy excludes bias/activation; timings are environment-specific and sparse path may be slower.
