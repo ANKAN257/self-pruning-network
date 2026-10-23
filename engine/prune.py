@@ -76,6 +76,8 @@ def prune_parameter(param, score: np.ndarray, target_sparsity: float) -> np.ndar
     if score.shape != param.data.shape:
         raise ValueError(f"Score shape {score.shape} must match parameter shape {param.data.shape}")
     target = _validate_target(target_sparsity)
+    if not np.all(np.isfinite(param.data)):
+        raise ValueError("Parameter values must all be finite before pruning")
     old_mask = getattr(param, "mask", None)
     if old_mask is None:
         active = np.ones_like(param.data, dtype=bool)
