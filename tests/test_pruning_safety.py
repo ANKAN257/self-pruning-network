@@ -60,3 +60,15 @@ def test_pruning_scheduler_is_bounded_and_monotonic():
     assert values[-1] == pytest.approx(0.9)
     assert all(0.1 <= value <= 0.9 for value in values)
     assert all(left <= right for left, right in zip(values, values[1:]))
+
+
+
+def test_pruning_rejects_non_finite_parameter_values_without_mutation():
+    parameter = make_parameter([[1.0, np.nan]])
+    original = parameter.data.copy()
+
+    with pytest.raises(ValueError, match="Parameter values"):
+        prune_parameter(parameter, np.array([[1.0, 0.0]]), 0.5)
+
+    np.testing.assert_equal(parameter.data, original)
+    assert parameter.mask is None
