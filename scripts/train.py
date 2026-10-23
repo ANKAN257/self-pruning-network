@@ -23,8 +23,16 @@ RESULTS_PATH = ROOT / "results" / "training_metrics.json"
 def load_problem_data(dataset_path: str | Path | None = None):
     path = Path(dataset_path) if dataset_path is not None else DEFAULT_DATASET_PATH
     x, labels = load_dataset(path)
-    if labels.size == 0 or labels.min() < 0:
+    if x.ndim != 2 or labels.ndim != 1 or len(x) != len(labels):
+        raise ValueError("Features must be 2D and labels must be a matching 1D array")
+    if len(labels) == 0 or labels.min() < 0:
         raise ValueError("Labels must be a non-empty array of non-negative class indices")
+    if not np.all(np.isfinite(x)):
+        raise ValueError("Features must contain only finite values")
+    if not np.all(np.isfinite(labels)) or not np.all(labels == np.floor(labels)):
+        raise ValueError("Labels must be finite integer class indices")
+    if len(np.unique(labels)) < 2:
+        raise ValueError("Training requires at least two classes")
     targets = np.eye(int(labels.max()) + 1)[labels]
     return x, labels, targets
 
@@ -57,6 +65,8 @@ def run_training(
 ):
     if n_epochs < 1 or batch_size < 1:
         raise ValueError("n_epochs and batch_size must be positive")
+    if not np.isfinite(learning_rate) or learning_rate <= 0.0:
+        raise ValueError("learning_rate must be finite and positive")
     rng = np.random.default_rng(seed)
     x, labels, targets = load_problem_data(dataset_path)
     model = MLP([x.shape[1], 16, int(labels.max()) + 1], rng=rng)
@@ -74,8 +84,12 @@ def run_training(
             yb = Tensor(targets[indices], requires_grad=False)
             optimizer.zero_grad()
             loss = softmax_cross_entropy(model.forward(xb), yb)
+            if not np.all(np.isfinite(loss.data)):
+                raise FloatingPointError(f"Non-finite loss encountered at epoch {epoch + 1}")
             loss.backward()
             optimizer.step()
+            if any(not np.all(np.isfinite(param.data)) for param in model.parameters()):
+                raise FloatingPointError(f"Non-finite model parameter encountered at epoch {epoch + 1}")
             epoch_loss += float(loss.data) * len(indices)
 
         target_sparsity = scheduler.target(epoch + 1)
@@ -83,9 +97,12 @@ def run_training(
         logits = model.forward(Tensor(x, requires_grad=False))
         accuracy = float(np.mean(np.argmax(logits.data, axis=1) == labels))
         achieved, active, total = _weight_sparsity(model)
+        mean_loss = epoch_loss / len(x)
+        if not np.isfinite(mean_loss) or not np.isfinite(accuracy):
+            raise FloatingPointError(f"Non-finite training metric encountered at epoch {epoch + 1}")
         history.append({
             "epoch": epoch + 1,
-            "loss": epoch_loss / len(x),
+            "loss": mean_loss,
             "accuracy": accuracy,
             "target_sparsity": target_sparsity,
             "achieved_sparsity": achieved,
@@ -96,6 +113,8 @@ def run_training(
     final_logits = model.forward(Tensor(x, requires_grad=False))
     final_accuracy = float(np.mean(np.argmax(final_logits.data, axis=1) == labels))
     final_loss = float(softmax_cross_entropy(final_logits, Tensor(targets, requires_grad=False)).data)
+    if not np.isfinite(final_loss) or not np.isfinite(final_accuracy):
+        raise FloatingPointError("Non-finite final training metric encountered")
     achieved, active, total = _weight_sparsity(model)
     results = {
         "seed": seed, "n_epochs": n_epochs, "batch_size": batch_size,
