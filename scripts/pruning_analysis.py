@@ -130,6 +130,15 @@ def run_trial(
     batch_size: int = 32,
     dataset_path: str | Path | None = None,
 ):
+    if criterion not in {"magnitude", "saliency"}:
+        raise ValueError("criterion must be 'magnitude' or 'saliency'")
+    if not np.isfinite(target_sparsity) or not 0.0 <= target_sparsity <= 1.0:
+        raise ValueError("target_sparsity must be finite and between 0 and 1")
+    if not isinstance(epochs, int) or isinstance(epochs, bool) or epochs < 1:
+        raise ValueError("epochs must be a positive integer")
+    if not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size < 1:
+        raise ValueError("batch_size must be a positive integer")
+
     rng = np.random.default_rng(seed)
     x, labels, targets = load_problem_data(dataset_path)
     x_train, y_train, t_train, x_val, y_val, t_val = split_data(x, labels, targets, seed)
