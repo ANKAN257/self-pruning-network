@@ -214,4 +214,4 @@ The optimizer treats an explicit mask as the source of truth. Masked weights sta
 - The sparse-aware path is a reference implementation, not a highly optimized sparse kernel. Do not claim a speedup unless the benchmark measurements on the target environment demonstrate one.
 - Aggressive pruning can reduce accuracy; use the committed/generated raw data to assess the trade-off.
 
-See [DESIGN.md](DESIGN.md) for autodiff, pruning, evaluation, cost-measurement, and multi-tenant serving notes.
+See [DESIGN.md](DESIGN.md) for autodiff, pruning, evaluation, cost-measurement, and multi-tenant serving notes. The committed [Part 4 evidence report](results/EVIDENCE.md) records the five-seed baseline comparison, a falsifiable quantitative claim, and the measured sparse-aware inference trade-off. Tensor division explicitly raises `ZeroDivisionError` when the denominator contains zero; regression coverage is in `tests/test_division_edges.py`.
