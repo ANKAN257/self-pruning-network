@@ -37,21 +37,58 @@ def load_problem_data(dataset_path: str | Path | None = None):
     x, labels = load_dataset(dataset_path)
     if x.ndim != 2 or labels.ndim != 1 or len(x) != len(labels):
         raise ValueError("Expected a 2D feature array and a matching 1D label array")
-    if len(labels) < 5 or labels.min() < 0:
-        raise ValueError("Need at least five samples with non-negative class labels")
-    targets = np.eye(int(labels.max()) + 1)[labels]
+    if len(labels) < 5:
+        raise ValueError("Need at least five samples")
+    if not np.all(np.isfinite(x)):
+        raise ValueError("Features must contain only finite values")
+    if not np.all(np.isfinite(labels)) or not np.all(labels == np.floor(labels)):
+        raise ValueError("Labels must be finite integer class indices")
+    labels = labels.astype(np.int64)
+    if np.any(labels < 0):
+        raise ValueError("Labels must be non-negative class indices")
+    classes, counts = np.unique(labels, return_counts=True)
+    if len(classes) < 2:
+        raise ValueError("Dataset must contain at least two classes")
+    if not np.array_equal(classes, np.arange(len(classes))):
+        raise ValueError("Class labels must be contiguous integers starting at zero")
+    if np.any(counts < 2):
+        raise ValueError("Each class needs at least two samples for a train/validation split")
+    targets = np.eye(len(classes), dtype=np.float64)[labels]
     return x, labels, targets
 
 
 def split_data(x, labels, targets, seed: int):
-    rng = np.random.default_rng(seed)
-    indices = rng.permutation(len(x))
-    n_val = max(1, int(round(len(x) * VALIDATION_FRACTION)))
-    n_val = min(n_val, len(x) - 1)
-    val_idx, train_idx = indices[:n_val], indices[n_val:]
-    return (x[train_idx], labels[train_idx], targets[train_idx],
-            x[val_idx], labels[val_idx], targets[val_idx])
+    """Create a deterministic stratified split with each class in both partitions."""
+    x = np.asarray(x)
+    labels = np.asarray(labels)
+    targets = np.asarray(targets)
+    if x.ndim != 2 or labels.ndim != 1 or targets.ndim != 2:
+        raise ValueError("Expected 2D features/targets and 1D labels")
+    if len(x) != len(labels) or len(x) != len(targets):
+        raise ValueError("Features, labels, and targets must have matching sample counts")
+    if len(labels) < 2 or not np.all(np.isfinite(x)) or not np.all(np.isfinite(targets)):
+        raise ValueError("Split data must be non-empty and finite")
+    if not np.all(np.isfinite(labels)) or not np.all(labels == np.floor(labels)):
+        raise ValueError("Labels must be finite integers")
 
+    rng = np.random.default_rng(seed)
+    train_parts = []
+    val_parts = []
+    for class_id in np.unique(labels):
+        class_indices = np.flatnonzero(labels == class_id)
+        if len(class_indices) < 2:
+            raise ValueError(f"Class {class_id} needs at least two samples for stratification")
+        class_indices = rng.permutation(class_indices)
+        n_val = min(len(class_indices) - 1, max(1, int(round(len(class_indices) * VALIDATION_FRACTION))))
+        val_parts.append(class_indices[:n_val])
+        train_parts.append(class_indices[n_val:])
+
+    train_idx = rng.permutation(np.concatenate(train_parts))
+    val_idx = rng.permutation(np.concatenate(val_parts))
+    return (
+        x[train_idx], labels[train_idx], targets[train_idx],
+        x[val_idx], labels[val_idx], targets[val_idx],
+    )
 
 def apply_target_mask(model, target_sparsity: float, criterion: str) -> None:
     for param in model.parameters():
@@ -93,6 +130,15 @@ def run_trial(
     batch_size: int = 32,
     dataset_path: str | Path | None = None,
 ):
+    if criterion not in {"magnitude", "saliency"}:
+        raise ValueError("criterion must be 'magnitude' or 'saliency'")
+    if not np.isfinite(target_sparsity) or not 0.0 <= target_sparsity <= 1.0:
+        raise ValueError("target_sparsity must be finite and between 0 and 1")
+    if not isinstance(epochs, int) or isinstance(epochs, bool) or epochs < 1:
+        raise ValueError("epochs must be a positive integer")
+    if not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size < 1:
+        raise ValueError("batch_size must be a positive integer")
+
     rng = np.random.default_rng(seed)
     x, labels, targets = load_problem_data(dataset_path)
     x_train, y_train, t_train, x_val, y_val, t_val = split_data(x, labels, targets, seed)
